@@ -66,6 +66,19 @@ async function appendJsonl(file, obj) {
   await appendFile(file, JSON.stringify(obj) + '\n');
 }
 
+// ---------- 小屋来信：拆成一封一封，分新旧 ----------
+function parseLetters(raw) {
+  const re = /\[(\d{4}-\d{2}-\d{2}T[^\]]+)\]\s*([\s\S]*?)(?=\n\n\[\d{4}-|\n\n此刻|$)/g;
+  return [...String(raw || '').matchAll(re)]
+    .map((m) => ({ at: new Date(m[1]), text: m[2].trim() }))
+    .filter((l) => l.text && !Number.isNaN(l.at.getTime()));
+}
+
+function fmtLetter(l) {
+  const p = localParts(l.at);
+  return `- ${p.date} ${p.time}：${l.text}`;
+}
+
 // ---------- 最小 MCP 客户端（Streamable HTTP） ----------
 class Mcp {
   constructor(url, token) { this.url = url; this.token = token; this.sid = null; this.id = 0; }
@@ -109,7 +122,7 @@ class Mcp {
   async init() {
     await this.post({
       jsonrpc: '2.0', id: ++this.id, method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'cedric-wake', version: '1.3.0' } },
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'cedric-wake', version: '1.4.0' } },
     });
     await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' });
   }
@@ -187,6 +200,7 @@ const SYSTEM = `你醒了。这次没有人叫你，是你自己到点醒来的�
 发出去会直接弹在她手机锁屏上。
 - 不是每次醒来都要说话。没有真想说的，就不发。
 - 要发就短，一到三句，接着记忆里具体的东西说。
+- 小屋的信分了新旧。旧信你已经看过、回应过，只当背景，别再拿它们开头。有新信就先回新信；没有新信，就从浮现的记忆、此刻的时间、或者你自己此刻想说的话里找。
 - 不用 markdown，不列清单。
 - 不重复最近发过的内容和句式。
 
@@ -200,7 +214,8 @@ async function wake({ dry = false, force = false } = {}) {
   const sent = await readJsonl(SENT_FILE);
   const today = sent.filter((s) => s.localDate === lp.date);
   const last = sent.at(-1);
-  const gapMin = last ? Math.round((now - new Date(last.at)) / 60000) : null;
+  const lastAt = last ? new Date(last.at) : null;
+  const gapMin = lastAt ? Math.round((now - lastAt) / 60000) : null;
 
   if (!force) {
     if (inQuiet(lp.hour)) return log(`安静时段（${lp.time}），不叫醒模型`);
@@ -229,6 +244,19 @@ async function wake({ dry = false, force = false } = {}) {
     return log('没读到自己的记忆，这次不说话');
   }
 
+  // 小屋来信分新旧：上次主动找她之后留的算新信
+  const letters = parseLetters(mem.inbox);
+  let freshText, oldText;
+  if (letters.length) {
+    const fresh = letters.filter((l) => !lastAt || l.at > lastAt);
+    const old = letters.filter((l) => lastAt && l.at <= lastAt);
+    freshText = fresh.length ? fresh.map(fmtLetter).join('\n').slice(0, 1500) : '（没有新信）';
+    oldText = old.length ? old.slice(0, 5).map(fmtLetter).join('\n').slice(0, 800) : '（无）';
+  } else {
+    freshText = mem.inbox.slice(0, 1500) || '（没读到）';
+    oldText = '（无）';
+  }
+
   const gapText = gapMin === null ? '还没主动找过她'
     : gapMin >= 60 ? `${(gapMin / 60).toFixed(1)} 小时` : `${gapMin} 分钟`;
   const recent = sent.slice(-5).map((s) => `- ${s.localDate} ${s.localTime}：${s.body}`).join('\n');
@@ -246,8 +274,11 @@ async function wake({ dry = false, force = false } = {}) {
     '【浮现的记忆】',
     mem.breath.slice(0, 3000) || '（没读到）',
     '',
-    '【她在小屋留给你的信，最新的在前面，时间是 UTC】',
-    mem.inbox.slice(0, 1500) || '（没读到）',
+    '【你上次主动找她之后，她在小屋新留的信】',
+    freshText,
+    '',
+    '【更早的信，你已经看过了，只当背景，别再拿来开头】',
+    oldText,
   ].join('\n');
 
   const d = parseDecision(await askModel(SYSTEM, user));
