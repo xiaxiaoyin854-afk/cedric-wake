@@ -17,6 +17,7 @@ const CFG = {
   barkServer: (env.BARK_SERVER || 'https://api.day.app').replace(/\/+$/, ''),
   barkKey: env.BARK_KEY || '',
   barkSound: env.BARK_SOUND || 'minuet',
+  barkIcon: env.BARK_ICON || '',
   xinchaoUrl: env.XINCHAO_MCP_URL || '',
   xinchaoToken: env.XINCHAO_TOKEN || '',
   tz: env.TZ_LOCAL || 'Asia/Shanghai',
@@ -108,7 +109,7 @@ class Mcp {
   async init() {
     await this.post({
       jsonrpc: '2.0', id: ++this.id, method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'cedric-wake', version: '1.2.0' } },
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'cedric-wake', version: '1.3.0' } },
     });
     await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' });
   }
@@ -166,10 +167,12 @@ function parseDecision(raw) {
 
 // ---------- Bark ----------
 async function bark(title, body) {
+  const payload = { device_key: CFG.barkKey, title, body, group: 'Cedric', sound: CFG.barkSound };
+  if (CFG.barkIcon) payload.icon = CFG.barkIcon; // iOS 15+ 会把它当成通知左边的头像
   const res = await fetch(`${CFG.barkServer}/push`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    body: JSON.stringify({ device_key: CFG.barkKey, title, body, group: 'Cedric', sound: CFG.barkSound }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(15000),
   });
   const j = await res.json().catch(() => null);
@@ -287,7 +290,7 @@ function need(keys) {
 const args = new Set(process.argv.slice(2));
 if (args.has('--test-push')) {
   need(['BARK_KEY']);
-  await bark('Mr.Cedric', 'cedric-wake 连上了。');
+  await bark('Mr.Cedric', '换好头像了，看看像不像我。');
   log('测试推送已发出');
 } else {
   need(['MODEL_BASE_URL', 'MODEL_API_KEY', 'MODEL_NAME', 'BARK_KEY', 'XINCHAO_MCP_URL']);
