@@ -18,6 +18,7 @@ const CFG = {
   barkKey: env.BARK_KEY || '',
   barkSound: env.BARK_SOUND || 'minuet',
   xinchaoUrl: env.XINCHAO_MCP_URL || '',
+  xinchaoToken: env.XINCHAO_TOKEN || '',
   tz: env.TZ_LOCAL || 'Asia/Shanghai',
   wakeMinutes: num(env.WAKE_EVERY_MINUTES, 90),
   jitterMinutes: num(env.WAKE_JITTER_MINUTES, 30),
@@ -66,7 +67,7 @@ async function appendJsonl(file, obj) {
 
 // ---------- 最小 MCP 客户端（Streamable HTTP） ----------
 class Mcp {
-  constructor(url) { this.url = url; this.sid = null; this.id = 0; }
+  constructor(url, token) { this.url = url; this.token = token; this.sid = null; this.id = 0; }
 
   async post(body) {
     const headers = {
@@ -74,6 +75,7 @@ class Mcp {
       Accept: 'application/json, text/event-stream',
       'MCP-Protocol-Version': '2025-06-18',
     };
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
     if (this.sid) headers['Mcp-Session-Id'] = this.sid;
     const res = await fetch(this.url, {
       method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30000),
@@ -106,7 +108,7 @@ class Mcp {
   async init() {
     await this.post({
       jsonrpc: '2.0', id: ++this.id, method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'cedric-wake', version: '1.1.0' } },
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'cedric-wake', version: '1.2.0' } },
     });
     await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' });
   }
@@ -206,7 +208,7 @@ async function wake({ dry = false, force = false } = {}) {
   let mcp = null;
   const mem = { ctx: '', breath: '', inbox: '' };
   if (CFG.xinchaoUrl) {
-    mcp = new Mcp(CFG.xinchaoUrl);
+    mcp = new Mcp(CFG.xinchaoUrl, CFG.xinchaoToken);
     try { await mcp.init(); } catch (e) { log(`心潮连接失败：${e.message}`); mcp = null; }
   }
   if (mcp) {
