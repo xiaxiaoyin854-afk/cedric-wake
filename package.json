@@ -1,0 +1,15 @@
+{
+  "name": "cedric-wake",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "定时醒来，读心潮，自己决定要不要用 Bark 推一条消息",
+  "main": "index.mjs",
+  "engines": { "node": ">=20.6" },
+  "scripts": {
+    "start": "node --env-file=.env index.mjs",
+    "once": "node --env-file=.env index.mjs --once --force",
+    "dry": "node --env-file=.env index.mjs --once --force --dry",
+    "test-push": "node --env-file=.env index.mjs --test-push"
+  }
+}
