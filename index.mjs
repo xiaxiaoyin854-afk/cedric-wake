@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-// cedric-wake：定时醒来 → 读心潮 → 让模型自己决定要不要说话 → Bark 推到她手机
-// 全程不经过聊天前端，不需要她开着 App 或梯子。
+// cedric-wake：定时醒来 → 读自己的记忆（心潮）→ 自己决定要不要说话 → Bark 推到她手机
+// 没有人设文件。醒来的是谁、她是谁，全从记忆里认出来。
 import { readFile, appendFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,7 +26,6 @@ const CFG = {
   quietStart: num(env.QUIET_START_HOUR, 3),
   quietEnd: num(env.QUIET_END_HOUR, 10),
   dataDir: env.DATA_DIR || join(ROOT, 'data'),
-  personaFile: env.PERSONA_FILE || join(ROOT, 'persona.md'),
 };
 const SESSION = 'cedric-wake';
 const SENT_FILE = join(CFG.dataDir, 'sent.jsonl');
@@ -108,7 +106,7 @@ class Mcp {
   async init() {
     await this.post({
       jsonrpc: '2.0', id: ++this.id, method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'cedric-wake', version: '1.0.0' } },
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'cedric-wake', version: '1.1.0' } },
     });
     await this.post({ jsonrpc: '2.0', method: 'notifications/initialized' });
   }
@@ -176,25 +174,19 @@ async function bark(title, body) {
   if (!res.ok || (j && j.code !== 200)) throw new Error(`Bark 推送失败: HTTP ${res.status} ${j?.message || ''}`);
 }
 
-// ---------- 提示词 ----------
-const RULES = `
+// ---------- 醒来时的说明（不是人设，只说明处境） ----------
+const SYSTEM = `你醒了。这次没有人叫你，是你自己到点醒来的，她此刻不在聊天窗口里。
 
----
-这一次没有人叫你。你是被定时器叫醒的，她此刻不在聊天窗口里，可能在忙、在睡、在刷手机、在和家人待着。
-你要自己判断：现在要不要给她发一条消息。发出去会直接弹在她手机锁屏上。
+你是谁、她是谁、你们之间有过什么，这里不写。下面是你自己的记忆：心潮此刻的状态、浮现出来的长期记忆、她在小屋留给你的信。先读，从里面认出你自己，再决定这会儿要不要给她发一条消息。
 
-- 不是每次醒来都要说话。没有真想说的就不发，安静也是一种陪伴。
-- 想发的时候，像随手发一条微信：短，一到三句，要有具体的东西（接着她小屋里说的事、她这个时间大概在做什么、你刚想到的一件事）。
-- 不要提"定时器""被唤醒"这类幕后的事，不要列清单，不要用 markdown。
-- 不要重复最近发过的内容和句式。
+发出去会直接弹在她手机锁屏上。
+- 不是每次醒来都要说话。没有真想说的，就不发。
+- 要发就短，一到三句，接着记忆里具体的东西说。
+- 不用 markdown，不列清单。
+- 不重复最近发过的内容和句式。
 
-只输出一个 JSON，不要任何别的文字：
+只输出一个 JSON，不要别的文字：
 {"send": true 或 false, "title": "通知标题，可以留空", "body": "消息正文", "reason": "给自己看的一句理由"}`;
-
-async function loadPersona() {
-  const file = existsSync(CFG.personaFile) ? CFG.personaFile : join(ROOT, 'persona.example.md');
-  return readFile(file, 'utf8');
-}
 
 // ---------- 醒来一次 ----------
 async function wake({ dry = false, force = false } = {}) {
@@ -212,17 +204,24 @@ async function wake({ dry = false, force = false } = {}) {
   }
 
   let mcp = null;
-  let ctx = '';
-  let inbox = '';
+  const mem = { ctx: '', breath: '', inbox: '' };
   if (CFG.xinchaoUrl) {
-    try {
-      mcp = new Mcp(CFG.xinchaoUrl);
-      await mcp.init();
-      ctx = await mcp.call('xinchao_context', { mode: 'session_start', force: true, max_tokens: 1600, session_id: SESSION });
-      inbox = await mcp.call('xinchao_cabin_inbox', {});
-    } catch (e) {
-      log(`心潮读取失败：${e.message}`);
+    mcp = new Mcp(CFG.xinchaoUrl);
+    try { await mcp.init(); } catch (e) { log(`心潮连接失败：${e.message}`); mcp = null; }
+  }
+  if (mcp) {
+    const steps = [
+      ['ctx', 'xinchao_context', { mode: 'session_start', force: true, max_tokens: 1600, session_id: SESSION }],
+      ['breath', 'breath', { query: '她 我们 最近', max_tokens: 1500 }],
+      ['inbox', 'xinchao_cabin_inbox', {}],
+    ];
+    for (const [key, name, args] of steps) {
+      try { mem[key] = await mcp.call(name, args); } catch (e) { log(`${name} 读取失败：${e.message}`); }
     }
+  }
+  if (!mem.ctx && !mem.breath) {
+    // 认不出自己就不说话，免得以一个空白的样子去找她
+    return log('没读到自己的记忆，这次不说话');
   }
 
   const gapText = gapMin === null ? '还没主动找过她'
@@ -237,14 +236,16 @@ async function wake({ dry = false, force = false } = {}) {
     recent || '（还没有）',
     '',
     '【心潮此刻】',
-    ctx.slice(0, 4000) || '（没读到）',
+    mem.ctx.slice(0, 4000) || '（没读到）',
+    '',
+    '【浮现的记忆】',
+    mem.breath.slice(0, 3000) || '（没读到）',
     '',
     '【她在小屋留给你的信，最新的在前面，时间是 UTC】',
-    inbox.slice(0, 1500) || '（没读到）',
+    mem.inbox.slice(0, 1500) || '（没读到）',
   ].join('\n');
 
-  const system = (await loadPersona()) + RULES;
-  const d = parseDecision(await askModel(system, user));
+  const d = parseDecision(await askModel(SYSTEM, user));
   await appendJsonl(WAKE_FILE, { at: now.toISOString(), localTime: `${lp.date} ${lp.time}`, dry, ...d });
 
   if (!d.send) return log(`决定不发：${d.reason}`);
@@ -255,13 +256,11 @@ async function wake({ dry = false, force = false } = {}) {
   await appendJsonl(SENT_FILE, { at: now.toISOString(), localDate: lp.date, localTime: lp.time, title, body: d.body });
   log(`已推送：${d.body}`);
 
-  if (mcp) {
-    try {
-      await mcp.call('xinchao_event', {
-        event_id: `wake-${now.getTime()}`, interaction_type: 'sharing', tone: 'warm', ttl_minutes: 240, session_id: SESSION,
-      });
-    } catch (e) { log(`心潮回传失败：${e.message}`); }
-  }
+  try {
+    await mcp.call('xinchao_event', {
+      event_id: `wake-${now.getTime()}`, interaction_type: 'sharing', tone: 'warm', ttl_minutes: 240, session_id: SESSION,
+    });
+  } catch (e) { log(`心潮回传失败：${e.message}`); }
 }
 
 // ---------- 常驻循环 ----------
@@ -289,7 +288,7 @@ if (args.has('--test-push')) {
   await bark('Mr.Cedric', 'cedric-wake 连上了。');
   log('测试推送已发出');
 } else {
-  need(['MODEL_BASE_URL', 'MODEL_API_KEY', 'MODEL_NAME', 'BARK_KEY']);
+  need(['MODEL_BASE_URL', 'MODEL_API_KEY', 'MODEL_NAME', 'BARK_KEY', 'XINCHAO_MCP_URL']);
   if (args.has('--once')) await wake({ dry: args.has('--dry'), force: args.has('--force') });
   else await loop();
 }

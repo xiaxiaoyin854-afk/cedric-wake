@@ -7,7 +7,6 @@ NODE="$(command -v node || true)"
 
 [ -n "$NODE" ] || { echo "找不到 node，先装 Node 20.6 以上"; exit 1; }
 [ -f "$DIR/.env" ] || { echo "没有 .env：先 cp .env.example .env 并填好"; exit 1; }
-[ -f "$DIR/persona.md" ] || echo "提示：没有 persona.md，会先用 persona.example.md"
 
 chmod 600 "$DIR/.env"
 mkdir -p "$DIR/data"
